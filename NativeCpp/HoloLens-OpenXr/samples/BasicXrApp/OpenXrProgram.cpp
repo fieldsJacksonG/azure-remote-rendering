@@ -570,6 +570,8 @@ namespace {
             return hologram;
         }
 
+        bool showEndpoints = true;
+
         void PollActions() {
             // Get updated action states.
             std::vector<XrActiveActionSet> activeActionSets = {{m_actionSet.Get(), XR_NULL_PATH}};
@@ -621,6 +623,40 @@ namespace {
                     }
 
                     ApplyVibration();
+
+                    //Raycast
+                    RR::RayCast RayCast;
+
+                    XrVector3f handPos = handLocation.pose.position;
+                    RayCast.StartPos = RR::Double3{ 0, 0, 2 };
+                    RayCast.EndPos = RR::Double3 {0, 0, -2};
+                    RayCast.HitCollection = RR::HitCollectionPolicy::ClosestHit;
+
+                    // Only visualize start and end on first raycast.
+                    if (showEndpoints)
+                    {
+                        showEndpoints = false;
+                        StartModelLoading(m_endpointURI, RayCast.StartPos, 0.1f);
+                        StartModelLoading(m_endpointURI, RayCast.EndPos, 0.1f);
+                    }
+
+                    m_api->RayCastQueryAsync(RayCast, [this](RR::Status Status, RR::ApiHandle<RR::RayCastQueryResult> Result)
+                    {
+                        if (Status != RR::Status::OK)
+                        {
+                            return;
+                        }
+
+                        std::vector<RR::RayCastHit> hits;
+                        Result->GetHits(hits);
+
+                        // Always 0
+                        if (hits.size() > 0)
+                        {
+                            RR::Double3 hitPos = hits[0].HitPosition;
+                            OutputDebugString(L"ARR RAYCAST HIT");
+                        }
+                    });
                 }
 
                 // This sample, when menu button is released, requests to quit the session, and therefore quit the application.
@@ -934,6 +970,8 @@ namespace {
                 init.RemoteRenderingDomain = "westus2.mixedreality.azure.com"; // <change to the region that the rendering session should be created in>
                 init.AccountDomain = "westus2.mixedreality.azure.com"; // <change to the region the account was created in>
                 m_modelURI = "builtin://Engine";
+                //TODO: This is a debug visualization of the raycast endpoints.  Change this to a simpler model to reduce overhead.
+                m_endpointURI = "builtin://Engine";
                 m_sessionOverride = ""; // If there is a valid session ID to re-use, put it here. Otherwise a new one is created
                 m_client = RR::ApiHandle(RR::RemoteRenderingClient(init));
             }
@@ -965,7 +1003,7 @@ namespace {
                 } else {
                     // create a new session
                     RR::RenderingSessionCreationOptions init;
-                    init.MaxLeaseInMinutes = 10; // session is leased for 10 minutes
+                    init.MaxLeaseInMinutes = 5; // session is leased for 5 minutes
                     init.Size = RR::RenderingSessionVmSize::Standard;
                     m_client->CreateNewRenderingSessionAsync(init, SessionHandler);
                 }
@@ -1026,7 +1064,8 @@ namespace {
 
                 if (m_isConnected && !m_modelLoadTriggered) {
                     m_modelLoadTriggered = true;
-                    StartModelLoading();
+                    RR::Double3 pos = { 0, 0, 0 };
+                    StartModelLoading(m_modelURI, pos, 1);
                 }
             }
 
@@ -1051,7 +1090,7 @@ namespace {
                 // set on the HolographicCamera.
                 auto settings = m_api->GetCameraSettings();
                 float localNear = std::min(m_nearFar.Near, m_nearFar.Far);
-                float localFar = std::max(m_nearFar.Far, m_nearFar.Far);
+                float localFar = std::max(m_nearFar.Near, m_nearFar.Far);
                 settings->SetNearAndFarPlane(localNear, localFar);
                 settings->SetInverseDepth(m_nearFar.Near > m_nearFar.Far);
                 settings->SetEnableDepth(true);
@@ -1121,24 +1160,28 @@ namespace {
             m_graphicsBinding->SetPoseMode(RR::PoseMode::Local);
         }
 
-        void StartModelLoading() {
+        void StartModelLoading(std::string modelURI, RR::Double3 pos, float scaleFactor) {
             m_modelLoadingProgress = 0.f;
 
             RR::LoadModelFromSasOptions params;
-            params.ModelUri = m_modelURI.c_str();
+            params.ModelUri = modelURI.c_str();
             params.Parent = nullptr;
 
             // start the async model loading
             m_api->LoadModelFromSasAsync(
                 params,
                 // completed callback
-                [this](RR::Status status, RR::ApiHandle<RR::LoadModelResult> result) {
+                [this, pos, scaleFactor](RR::Status status, RR::ApiHandle<RR::LoadModelResult> result) {
                     m_modelLoadResult = RR::StatusToResult(status);
                     m_modelLoadFinished = true;
 
                     if (m_modelLoadResult == RR::Result::Success) {
-                        RR::Double3 pos = {0.0, 0.0, -2.0};
                         result->GetRoot()->SetPosition(pos);
+                        if (scaleFactor != 1)
+                        {
+                            RR::Float3 scale = { scaleFactor, scaleFactor, scaleFactor };
+                            result->GetRoot()->SetScale(scale);
+                        }
                     }
                 },
                 // progress update callback
@@ -1231,6 +1274,7 @@ namespace {
 
         // Model loading:
         std::string m_modelURI;
+        std::string m_endpointURI;
 
         // Connection state machine:
         Timer m_timer;
